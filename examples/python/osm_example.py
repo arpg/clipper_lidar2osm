@@ -155,11 +155,6 @@ def draw_registration_result(source, target, transformation):
     o3d.visualization.draw_geometries([source_temp, target_temp])
 
 
-def read_npy_file(file_path):
-    point_cloud = np.load(file_path, allow_pickle=True)
-    return point_cloud
-
-
 def get_transformed_point_cloud(
     pc2, transformation_matrices, frame_number1, frame_number2
 ):
@@ -232,6 +227,40 @@ def labels2RGB2(label_ids, labels_dict):
     return rgb_array
 
 
+import re
+
+
+# Iterate over all files in the directory
+def get_frame_numbers(directory_path):
+    frame_numbers = []
+    for filename in os.listdir(directory_path):
+        if filename.endswith(".npy") and "road" in filename:
+            # Extract the frame number using regex
+            match = re.search(r"frame_(\d+)_road_points.npy", filename)
+            if match:
+                frame_numbers.append(int(match.group(1)))
+    return frame_numbers
+
+
+def get_accum_points(first_frame_idx, final_frame_idx, data_dir, osm_frames):
+    semantic_classes = ["build", "road"]
+    build_points_list = []
+    road_points_list = []
+    for frame_idx in range(first_frame_idx, final_frame_idx):
+        for semantic_class in semantic_classes:
+            frame_number = osm_frames[frame_idx]
+            points_filename = f"frame_{frame_number:010d}_{semantic_class}_points.npy"
+            points_filepath = os.path.join(data_dir, points_filename)
+            points = np.load(points_filepath, allow_pickle=True)
+            if "build" in semantic_class:
+                build_points_list.extend(points)
+            elif "road" in semantic_class:
+                road_points_list.extend(points)
+    build_accum_points = np.asarray(build_points_list)
+    road_accum_points = np.asarray(road_points_list)
+    return build_accum_points, road_accum_points
+
+
 import os
 
 from kitti360_OSM_utils import labels
@@ -240,10 +269,9 @@ labels_dict = {label.id: label.color for label in labels}
 
 pointcloud1_frame_number = 259
 pointcloud2_frame_number = 269
-pcd_1_build_file = f"/home/donceykong/Desktop/datasets/KITTI-360/data_3d_extracted/2013_05_28_drive_0000_sync/map_segments/0000000009_0000000500_build_points_map.npy"
-pcd_1_road_file = f"/home/donceykong/Desktop/datasets/KITTI-360/data_3d_extracted/2013_05_28_drive_0000_sync/map_segments/0000000009_0000000500_road_points_map.npy"
-pcd_2_build_file = f"/home/donceykong/Desktop/datasets/KITTI-360/data_3d_extracted/2013_05_28_drive_0000_sync/map_segments/0000000509_0000001000_build_points_map.npy"
-pcd_2_road_file = f"/home/donceykong/Desktop/datasets/KITTI-360/data_3d_extracted/2013_05_28_drive_0000_sync/map_segments/0000000509_0000001000_road_points_map.npy"
+data_dir = f"../data/kitti360_osm_data/2013_05_28_drive_0000_sync/"
+
+osm_frames = get_frame_numbers(data_dir)
 
 seq = 0
 sequence_dir = f"2013_05_28_drive_{seq:04d}_sync"
@@ -254,17 +282,33 @@ velodyne_poses_file = os.path.join(
 )
 velodyne_poses = read_poses(velodyne_poses_file)
 
-pointcloud_1_build = read_npy_file(pcd_1_build_file)[:, :3]
-pointcloud_1_road = read_npy_file(pcd_1_road_file)[:, :3]
-pointcloud_1_combined = np.concatenate((pointcloud_1_build, pointcloud_1_road), axis=0)
+pointcloud_1_building, pointcloud_1_road = get_accum_points(
+    first_frame_idx=0,
+    final_frame_idx=20,
+    data_dir=data_dir,
+    osm_frames=osm_frames,
+)
+pointcloud_1_building_xyz = pointcloud_1_building[:, :3]
+pointcloud_1_road_xyz = pointcloud_1_road[:, :3]
+pointcloud_1_combined = np.concatenate(
+    (pointcloud_1_building_xyz, pointcloud_1_road_xyz), axis=0
+)
 # rgb_np = labels2RGB2(lidar_points_3d_accum[:, 4], seq_extract.labels_dict)
 pcd_1 = o3d.geometry.PointCloud()
 pcd_1.points = o3d.utility.Vector3dVector(pointcloud_1_combined)
 pcd_1.paint_uniform_color(np.array([1, 0, 0]))
 
-pointcloud_2_build = read_npy_file(pcd_2_build_file)[:, :3]
-pointcloud_2_road = read_npy_file(pcd_2_road_file)[:, :3]
-pointcloud_2_combined = np.concatenate((pointcloud_2_build, pointcloud_2_road), axis=0)
+pointcloud_2_building, pointcloud_2_road = get_accum_points(
+    first_frame_idx=0,
+    final_frame_idx=20,
+    data_dir=data_dir,
+    osm_frames=osm_frames,
+)
+pointcloud_2_building_xyz = pointcloud_2_building[:, :3]
+pointcloud_2_road_xyz = pointcloud_2_road[:, :3]
+pointcloud_2_combined = np.concatenate(
+    (pointcloud_2_building_xyz, pointcloud_2_road_xyz), axis=0
+)
 pcd_2 = o3d.geometry.PointCloud()
 pcd_2.points = o3d.utility.Vector3dVector(pointcloud_2_combined)
 pcd_2.paint_uniform_color(np.array([0, 1, 0]))
@@ -347,4 +391,5 @@ p2p = o3d.pipelines.registration.TransformationEstimationPointToPoint()
 That_21 = p2p.compute_transformation(model, data, o3d.utility.Vector2iVector(Ain))
 get_err(T_21, That_21)
 
+draw_registration_result(model, data, That_21)
 draw_registration_result(model, data, That_21)
