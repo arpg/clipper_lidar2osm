@@ -1,34 +1,55 @@
 import copy
+import os
+import re
 import time
 
 import clipperpy
 import numpy as np
 import open3d as o3d
+from kitti360_osm_utils import labels
 from scipy.spatial.transform import Rotation
+
+
+def generate_Abad(n1, n2):
+    print("STARTING ABAD")
+    # Create a grid of all index combinations
+    I, J = np.meshgrid(np.arange(n1), np.arange(n2), indexing="ij")
+
+    # Flatten the arrays to get all combinations as column vectors
+    I_flat = I.flatten()
+    J_flat = J.flatten()
+
+    # Filter out the pairs where indices are the same
+    mask = I_flat != J_flat
+    Abad = np.vstack((I_flat[mask], J_flat[mask])).T
+
+    print("Finished ABAD")
+    return Abad
 
 
 def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21):
     """Generate Dataset"""
 
-    # pcd = o3d.io.read_point_cloud(pcfile)
-
-    # if nia > n1:
-    #     raise ValueError(
-    #         "Cannot have more inlier associations "
-    #         "than there are model points. Increase"
-    #         "the number of points to sample from the"
-    #         "original point cloud model."
-    #     )
+    print(f"Size of n1 is {n1} and size of n2 is {n2}.")
+    if nia > n1:
+        raise ValueError(
+            "Cannot have more inlier associations "
+            "than there are model points. Increase"
+            "the number of points to sample from the"
+            "original point cloud model."
+        )
 
     # radius of outlier sphere
     R = 200
 
     # Downsample from the original point cloud, sample randomly
-    I = np.random.choice(len(pcd.points), n1, replace=False)
+    # I1 = np.random.choice(len(pcd.points), n1, replace=False)
+    # D1 = np.asarray(pcd.points)[I1, :].T
     D1 = np.asarray(pcd.points).T
 
     # Rotate into view 2 using ground truth transformation
-    I = np.random.choice(len(pcd2.points), n2, replace=False)
+    # I2 = np.random.choice(len(pcd2.points), n2, replace=False)
+    # D2 = np.asarray(pcd2.points)[I2, :].T
     D2 = np.asarray(pcd2.points).T
     D2 = T_21[0:3, 0:3] @ D2 + T_21[0:3, 3].reshape(-1, 1)
 
@@ -37,8 +58,8 @@ def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21):
     eta2 = np.random.uniform(low=-sigma / 2.0, high=sigma / 2.0, size=D2.shape)
 
     # Add noise to view 2
-    D1 += eta1
-    D2 += eta2
+    # D1 += eta1
+    # D2 += eta2
 
     def randsphere(m, n, r):
         from scipy.special import gammainc
@@ -78,23 +99,6 @@ def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21):
     Agt = Agood[IAgood, :]
 
     return (D1, D2, Agt, A)
-
-
-# def generate_Abad(n1, n2):
-#     print("STARTING ABAD")
-#     # Create a grid of all index combinations
-#     I, J = np.meshgrid(np.arange(n1), np.arange(n2), indexing="ij")
-
-#     # Flatten the arrays to get all combinations as column vectors
-#     I_flat = I.flatten()
-#     J_flat = J.flatten()
-
-#     # Filter out the pairs where indices are the same
-#     mask = I_flat != J_flat
-#     Abad = np.vstack((I_flat[mask], J_flat[mask])).T
-
-#     print("Finished ABAD")
-#     return Abad
 
 
 # def generate_dataset(pcd_1, pcd_2, n1, n2, nia, noa, T_21):
@@ -155,79 +159,14 @@ def draw_registration_result(source, target, transformation):
     o3d.visualization.draw_geometries([source_temp, target_temp])
 
 
-def get_transformed_point_cloud(
-    pc2, transformation_matrices, frame_number1, frame_number2
-):
-    """Transform a point cloud from origin to where the lidar sensor is, given a scan number.
-
-    Args:
-        pc (np array of points): The lidar pointcloud to be transformed.
-        transformation_matrices (dict of poses): Python dictionary containing the 3x3 pose of lidar sensor for a given scan number.
-        frame_number (int): The nth lidar scan (scan number) within the specific sequence.
-
-    Returns:
-        transformed_xyz: The pointcloud transformed to where the lidar sensor is.
-    """
-    # Get the transformation matrix for the current frame
-    transformation_matrix_1 = transformation_matrices.get(frame_number1)
-    transformation_matrix_2 = transformation_matrices.get(frame_number2)
-
-    # Calculate the inverse of the first matrix
-    inverse_matrix_1 = np.linalg.inv(transformation_matrix_1)
-
-    # Calculate the transformation difference
-    transformation_difference = np.dot(inverse_matrix_1, transformation_matrix_2)
-
-    # Separate the XYZ coordinates and intensity values
-    xyz = pc2[:, :3]
-
-    # Convert the XYZ coordinates to homogeneous coordinates
-    xyz_homogeneous = np.hstack([xyz, np.ones((xyz.shape[0], 1))])
-
-    # Apply the transformation to each XYZ coordinate
-    transformed_xyz = np.dot(xyz_homogeneous, transformation_difference.T)[:, :3]
-
-    return transformed_xyz
-
-
-def read_poses(file_path):
-    """
-    Reads 4x4 or 3x4 transformation matrices from a file.
-
-    Args:
-        file_path (str): The path to the file containing poses.
-
-    Returns:
-        dict: A dictionary where keys are frame indices and values are 4x4 numpy arrays representing transformation matrices.
-    """
-    poses_xyz = {}
-    with open(file_path, "r") as file:
-        for line in file:
-            elements = line.strip().split()
-            frame_index = int(elements[0])
-            if len(elements[1:]) == 16:
-                matrix_4x4 = np.array(elements[1:], dtype=float).reshape((4, 4))
-            else:
-                matrix_3x4 = np.array(elements[1:], dtype=float).reshape((3, 4))
-                matrix_4x4 = np.vstack([matrix_3x4, np.array([0, 0, 0, 1])])
-            poses_xyz[frame_index] = matrix_4x4
-    return poses_xyz
-
-
 def labels2RGB2(label_ids, labels_dict):
     # Prepare the output array
-    rgb_array = np.zeros((label_ids.shape[0], 3), dtype=float)
+    rgb_array = np.zeros((label_ids.shape[0], 3), dtype=np.double)
     for idx, label_id in enumerate(label_ids):
-        # print(f"label_id: {label_id}")
         if label_id in labels_dict:
             color = labels_dict.get(label_id, (0, 0, 0))  # Default color is black
-            # print(f"Color: {color}")
-            rgb_array[idx] = np.array(color) / 255
-            # print(f"rgb_array[idx]: {rgb_array[idx]}")
+            rgb_array[idx] = np.array(color) / 255.0
     return rgb_array
-
-
-import re
 
 
 # Iterate over all files in the directory
@@ -239,7 +178,7 @@ def get_frame_numbers(directory_path):
             match = re.search(r"frame_(\d+)_road_points.npy", filename)
             if match:
                 frame_numbers.append(int(match.group(1)))
-    return frame_numbers
+    return sorted(frame_numbers)
 
 
 def get_accum_points(first_frame_idx, final_frame_idx, data_dir, osm_frames):
@@ -261,46 +200,38 @@ def get_accum_points(first_frame_idx, final_frame_idx, data_dir, osm_frames):
     return build_accum_points, road_accum_points
 
 
-import os
-
-from kitti360_OSM_utils import labels
-
 labels_dict = {label.id: label.color for label in labels}
 
-pointcloud1_frame_number = 259
-pointcloud2_frame_number = 269
-data_dir = f"../data/kitti360_osm_data/2013_05_28_drive_0000_sync/"
+seq = 0
+data_dir = f"../../data/kitti360_osm_data/2013_05_28_drive_{seq:04d}_sync/"
 
 osm_frames = get_frame_numbers(data_dir)
-
-seq = 0
-sequence_dir = f"2013_05_28_drive_{seq:04d}_sync"
-velodyne_poses_file = os.path.join(
-    "/home/donceykong/Desktop/datasets/KITTI-360/data_poses",
-    sequence_dir,
-    "velodyne_poses.txt",
-)
-velodyne_poses = read_poses(velodyne_poses_file)
+print(f"len(osm_frames): {len(osm_frames)}")
 
 pointcloud_1_building, pointcloud_1_road = get_accum_points(
     first_frame_idx=0,
-    final_frame_idx=20,
+    final_frame_idx=50,
     data_dir=data_dir,
     osm_frames=osm_frames,
 )
 pointcloud_1_building_xyz = pointcloud_1_building[:, :3]
 pointcloud_1_road_xyz = pointcloud_1_road[:, :3]
-pointcloud_1_combined = np.concatenate(
+pointcloud_1_building_semantic = pointcloud_1_building[:, 4]
+pointcloud_1_road_semantic = pointcloud_1_road[:, 4]
+pointcloud_1_xyz_combined = np.concatenate(
     (pointcloud_1_building_xyz, pointcloud_1_road_xyz), axis=0
 )
-# rgb_np = labels2RGB2(lidar_points_3d_accum[:, 4], seq_extract.labels_dict)
-pcd_1 = o3d.geometry.PointCloud()
-pcd_1.points = o3d.utility.Vector3dVector(pointcloud_1_combined)
-pcd_1.paint_uniform_color(np.array([1, 0, 0]))
+target_pointcloud_semantic_combined = np.concatenate(
+    (pointcloud_1_building_semantic, pointcloud_1_road_semantic), axis=0
+)
+target_pointcloud_rgb = labels2RGB2(target_pointcloud_semantic_combined, labels_dict)
+target_pcd = o3d.geometry.PointCloud()
+target_pcd.points = o3d.utility.Vector3dVector(pointcloud_1_xyz_combined)
+target_pcd.colors = o3d.utility.Vector3dVector(target_pointcloud_rgb)
 
 pointcloud_2_building, pointcloud_2_road = get_accum_points(
     first_frame_idx=0,
-    final_frame_idx=20,
+    final_frame_idx=len(osm_frames) - 1,
     data_dir=data_dir,
     osm_frames=osm_frames,
 )
@@ -313,16 +244,14 @@ pcd_2 = o3d.geometry.PointCloud()
 pcd_2.points = o3d.utility.Vector3dVector(pointcloud_2_combined)
 pcd_2.paint_uniform_color(np.array([0, 1, 0]))
 
-o3d.visualization.draw_geometries(
-    [
-        pcd_2,
-        pcd_1,
-    ]
-)
+o3d.visualization.draw_geometries([target_pcd, pcd_2])
 
 # Generate dataset
-n1 = 1000  # number of points used on model (i.e., seen in view 1)
-n2o = 2000  # number of outliers in data (i.e., seen in view 2)
+percent_input_points = 0.01
+# number of points used on model (i.e., seen in view 1)
+n1 = round(percent_input_points * len(target_pcd.points))
+# number of outliers in data (i.e., seen in view 2)
+n2o = round(percent_input_points * len(pcd_2.points))
 n2 = n1 + n2o  # number of points in view 2
 sigma = 0.01  # uniform noise [m] range
 
@@ -336,19 +265,18 @@ T_21 = np.eye(4)
 T_21[0:3, 0:3] = Rotation.random().as_matrix()
 T_21[0:3, 3] = np.random.uniform(low=-5, high=5, size=(3,))
 
-D1, D2, Agt, A = generate_dataset(pcd_2, pcd_1, n1, n2, nia, noa, sigma, T_21)
+D1, D2, Agt, A = generate_dataset(pcd_2, target_pcd, n1, n2, nia, noa, sigma, T_21)
 
 # View unaligned data
 pcd_2_tf = o3d.geometry.PointCloud()
 pcd_2_tf.points = o3d.utility.Vector3dVector(D2.T)
 pcd_2_tf.paint_uniform_color(np.array([0, 1, 0]))
-o3d.visualization.draw_geometries([pcd_1, pcd_2_tf])
+o3d.visualization.draw_geometries([target_pcd, pcd_2_tf])
 
-#
 #
 iparams = clipperpy.invariants.EuclideanDistanceParams()
 iparams.sigma = 0.01
-iparams.epsilon = 0.1
+iparams.epsilon = 0.01
 invariant = clipperpy.invariants.EuclideanDistance(iparams)
 
 params = clipperpy.Params()
@@ -391,5 +319,4 @@ p2p = o3d.pipelines.registration.TransformationEstimationPointToPoint()
 That_21 = p2p.compute_transformation(model, data, o3d.utility.Vector2iVector(Ain))
 get_err(T_21, That_21)
 
-draw_registration_result(model, data, That_21)
 draw_registration_result(model, data, That_21)
