@@ -8,9 +8,13 @@ import numpy as np
 import open3d as o3d
 from kitti360_osm_utils import labels
 from scipy.spatial.transform import Rotation
+from typing import Tuple
 
 
-def generate_Abad(n1, n2):
+def generate_Abad(n1, n2) -> np.array:
+    """
+    Create incorrect associations from the indices of view1 and view2
+    """
     print("STARTING ABAD")
     # Create a grid of all index combinations
     I, J = np.meshgrid(np.arange(n1), np.arange(n2), indexing="ij")
@@ -27,8 +31,8 @@ def generate_Abad(n1, n2):
     return Abad
 
 
-def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21):
-    """Generate Dataset"""
+def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Generate Dataset: view1, view2, associations ground truth, associations with inliers and outliers"""
 
     print(f"Size of n1 is {n1} and size of n2 is {n2}.")
     if nia > n1:
@@ -54,8 +58,8 @@ def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21):
     D2 = T_21[0:3, 0:3] @ D2 + T_21[0:3, 3].reshape(-1, 1)
 
     # Add noise uniformly sampled from a sigma cube around the true point
-    eta1 = np.random.uniform(low=-sigma / 2.0, high=sigma / 2.0, size=D1.shape)
-    eta2 = np.random.uniform(low=-sigma / 2.0, high=sigma / 2.0, size=D2.shape)
+    # eta1 = np.random.uniform(low=-sigma / 2.0, high=sigma / 2.0, size=D1.shape)
+    # eta2 = np.random.uniform(low=-sigma / 2.0, high=sigma / 2.0, size=D2.shape)
 
     # Add noise to view 2
     # D1 += eta1
@@ -102,21 +106,29 @@ def generate_dataset(pcd, pcd2, n1, n2, nia, noa, sigma, T_21):
     return (D1, D2, Agt, A)
 
 
-def get_err(T, That):
+def get_err(T, That) -> Tuple[float, float]:
+    """
+    Returns the error of the estimated transformation matrix
+    """
     Terr = np.linalg.inv(T) @ That
     rerr = abs(np.arccos(min(max(((Terr[0:3, 0:3]).trace() - 1) / 2, -1.0), 1.0)))
     terr = np.linalg.norm(Terr[0:3, 3])
     return (rerr, terr)
 
 
-def draw_registration_result(source, target, transformation):
+def draw_registration_result(source, target, transformation) -> None:
+    """
+    Vizualize the target pc with the transformed (estimated with clipper) source pc"""
     source_temp = copy.deepcopy(source)
     target_temp = copy.deepcopy(target)
     source_temp.transform(transformation)
     o3d.visualization.draw_geometries([source_temp, target_temp])
 
 
-def labels2RGB2(label_ids, labels_dict):
+def labels2RGB2(label_ids, labels_dict) -> np.array:
+    """
+    Give the semantic labels color values
+    """
     # Prepare the output array
     rgb_array = np.zeros((label_ids.shape[0], 3), dtype=np.double)
     for idx, label_id in enumerate(label_ids):
@@ -126,8 +138,11 @@ def labels2RGB2(label_ids, labels_dict):
     return rgb_array
 
 
-# Iterate over all files in the directory
-def get_frame_numbers(directory_path):
+
+def get_frame_numbers(directory_path) -> list:
+    """
+    Count the total number of files in the directory 
+    """
     frame_numbers = []
     for filename in os.listdir(directory_path):
         if filename.endswith(".npy") and "road" in filename:
@@ -138,7 +153,10 @@ def get_frame_numbers(directory_path):
     return sorted(frame_numbers)
 
 
-def get_accum_points(first_frame_idx, final_frame_idx, data_dir, osm_frames):
+def get_accum_points(first_frame_idx, final_frame_idx, data_dir, osm_frames) -> Tuple[np.array, np.array]:
+    """
+    Iterate through the data_dir frames and accumulate points (x,y,z,semantic) in their respective semantic class, road or building
+    """
     semantic_classes = ["build", "road"]
     build_points_list = []
     road_points_list = []
@@ -157,124 +175,126 @@ def get_accum_points(first_frame_idx, final_frame_idx, data_dir, osm_frames):
     return build_accum_points, road_accum_points
 
 
-labels_dict = {label.id: label.color for label in labels}
+if __name__ == "__main__":
+    # import kitti360 semantic labels from kitti360_osm_util.py
+    labels_dict = {label.id: label.color for label in labels}
+    # define data directory
+    seq = 0
+    data_dir = os.path.join('..', '..', 'data', 'kitti360_osm_data', f'2013_05_28_drive_{seq:04d}_sync')
+    # count the number of frames collected from kitti360
+    osm_frames = get_frame_numbers(data_dir)
+    print(f"len(osm_frames): {len(osm_frames)}")
+    # Accumulate the points from kitti360 frames from npy files for target. ADJUST: first_frame_id
+    target_pointcloud_building, target_pointcloud_road = get_accum_points(
+        first_frame_idx=50,
+        final_frame_idx=len(osm_frames) - 1,
+        data_dir=data_dir,
+        osm_frames=osm_frames,
+    )
+    # seperate the xyz points from the sematic information  from the road and buildings appropriatly
+    target_pointcloud_building_xyz = target_pointcloud_building[:, :3]
+    target_pointcloud_road_xyz = target_pointcloud_road[:, :3]
+    target_pointcloud_building_semantic = target_pointcloud_building[:, 4]
+    target_pointcloud_road_semantic = target_pointcloud_road[:, 4]
+    # combine road xyz with building xyz, combine road semantic with building semantic
+    target_pointcloud_xyz_combined = np.concatenate(
+        (target_pointcloud_building_xyz, target_pointcloud_road_xyz), axis=0
+    )
+    target_pointcloud_semantic_combined = np.concatenate(
+        (target_pointcloud_building_semantic, target_pointcloud_road_semantic), axis=0
+    )
+    # convert the target point cloud from np.array to o3d Vecotor3dVector, with semantic info as colors
+    target_pointcloud_rgb = labels2RGB2(target_pointcloud_semantic_combined, labels_dict)
+    target_pcd = o3d.geometry.PointCloud()
+    target_pcd.points = o3d.utility.Vector3dVector(target_pointcloud_xyz_combined)
+    target_pcd.colors = o3d.utility.Vector3dVector(target_pointcloud_rgb)
+    # Accumulate source points from kitti360 frames
+    source_pointcloud_building, source_pointcloud_road = get_accum_points(
+        first_frame_idx=90,
+        final_frame_idx=105,
+        data_dir=data_dir,
+        osm_frames=osm_frames,
+    )
+    # seperate xyz and semantic info and convert to o3d.vector3dVector (no)
+    source_pointcloud_building_xyz = source_pointcloud_building[:, :3]
+    source_pointcloud_road_xyz = source_pointcloud_road[:, :3]
+    source_pointcloud_combined = np.concatenate(
+        (source_pointcloud_building_xyz, source_pointcloud_road_xyz), axis=0
+    )
+    source_pcd = o3d.geometry.PointCloud()
+    source_pcd.points = o3d.utility.Vector3dVector(source_pointcloud_combined)
+    source_pcd.paint_uniform_color(np.array([0, 1, 0]))
+    # viz ground truth
+    o3d.visualization.draw_geometries([target_pcd, source_pcd])
+    # ---- Generate dataset ---- #
+    percent_input_points = 0.01
+    n1 = round(percent_input_points * len(target_pcd.points)) # number of points in target
+    n2o = round(percent_input_points * len(source_pcd.points)) # number of outliers in data (points from both target and source that do not overlap)
+    n2 = n1 + n2o  # number of points in view 2
+    sigma = 0.01  # uniform noise [m] range
+    m = n1  # total number of associations in problem
+    outrat = 0.5  # outlier ratio of initial association set
+    noa = round(m * outrat)  # number of outlier associations
+    nia = m - noa  # number of inlier associations
+    # generate random transform(R,t)
+    T_21 = np.eye(4)
+    T_21[0:3, 0:3] = Rotation.random().as_matrix()
+    T_21[0:3, 3] = np.random.uniform(low=-5, high=5, size=(3,))
 
-seq = 0
-data_dir = f"../../data/kitti360_osm_data/2013_05_28_drive_{seq:04d}_sync/"
+    D1, D2, Agt, A = generate_dataset(target_pcd, source_pcd, n1, n2, nia, noa, sigma, T_21)
 
-osm_frames = get_frame_numbers(data_dir)
-print(f"len(osm_frames): {len(osm_frames)}")
+    # View unaligned data
+    pcd_2_tf = o3d.geometry.PointCloud()
+    pcd_2_tf.points = o3d.utility.Vector3dVector(D2.T)
+    pcd_2_tf.paint_uniform_color(np.array([0, 1, 0]))
+    o3d.visualization.draw_geometries([target_pcd, pcd_2_tf])
 
-target_pointcloud_building, target_pointcloud_road = get_accum_points(
-    first_frame_idx=0,
-    final_frame_idx=len(osm_frames) - 1,
-    data_dir=data_dir,
-    osm_frames=osm_frames,
-)
-target_pointcloud_building_xyz = target_pointcloud_building[:, :3]
-target_pointcloud_road_xyz = target_pointcloud_road[:, :3]
-target_pointcloud_building_semantic = target_pointcloud_building[:, 4]
-target_pointcloud_road_semantic = target_pointcloud_road[:, 4]
-target_pointcloud_xyz_combined = np.concatenate(
-    (target_pointcloud_building_xyz, target_pointcloud_road_xyz), axis=0
-)
-target_pointcloud_semantic_combined = np.concatenate(
-    (target_pointcloud_building_semantic, target_pointcloud_road_semantic), axis=0
-)
-target_pointcloud_rgb = labels2RGB2(target_pointcloud_semantic_combined, labels_dict)
-target_pcd = o3d.geometry.PointCloud()
-target_pcd.points = o3d.utility.Vector3dVector(target_pointcloud_xyz_combined)
-target_pcd.colors = o3d.utility.Vector3dVector(target_pointcloud_rgb)
+    # ---- Clipper ---- #
+    iparams = clipperpy.invariants.EuclideanDistanceParams()
+    iparams.sigma = 0.01
+    iparams.epsilon = 0.01
+    invariant = clipperpy.invariants.EuclideanDistance(iparams)
 
-source_pointcloud_building, source_pointcloud_road = get_accum_points(
-    first_frame_idx=0,
-    final_frame_idx=150,
-    data_dir=data_dir,
-    osm_frames=osm_frames,
-)
-source_pointcloud_building_xyz = source_pointcloud_building[:, :3]
-source_pointcloud_road_xyz = source_pointcloud_road[:, :3]
-source_pointcloud_combined = np.concatenate(
-    (source_pointcloud_building_xyz, source_pointcloud_road_xyz), axis=0
-)
-source_pcd = o3d.geometry.PointCloud()
-source_pcd.points = o3d.utility.Vector3dVector(source_pointcloud_combined)
-source_pcd.paint_uniform_color(np.array([0, 1, 0]))
+    params = clipperpy.Params()
+    params.rounding = clipperpy.Rounding.DSD_HEU
+    clipper = clipperpy.CLIPPER(invariant, params)
 
-o3d.visualization.draw_geometries([target_pcd, source_pcd])
+    t0 = time.perf_counter()
+    clipper.score_pairwise_consistency(D1, D2, A)
+    t1 = time.perf_counter()
+    print(f"Affinity matrix creation took {t1-t0:.3f} seconds")
 
-# Generate dataset
-percent_input_points = 0.01
-# number of points used on model (This is the number of points in target?)
-n1 = round(percent_input_points * len(target_pcd.points))
-# number of outliers in data (points from both target and source that do not overlap)
-n2o = round(percent_input_points * len(source_pcd.points))
-n2 = n1 + n2o  # number of points in view 2
-sigma = 0.01  # uniform noise [m] range
+    t0 = time.perf_counter()
+    clipper.solve()
+    t1 = time.perf_counter()
 
-m = n1  # total number of associations in problem
-outrat = 0.5  # outlier ratio of initial association set
-noa = round(m * outrat)  # number of outlier associations
-nia = m - noa  # number of inlier associations
+    A = clipper.get_initial_associations()
+    Ain = clipper.get_selected_associations()
 
-# generate random (R,t)
-T_21 = np.eye(4)
-T_21[0:3, 0:3] = Rotation.random().as_matrix()
-T_21[0:3, 3] = np.random.uniform(low=-5, high=5, size=(3,))
+    p = np.isin(Ain, Agt)[:, 0].sum() / Ain.shape[0]
+    r = np.isin(Ain, Agt)[:, 0].sum() / Agt.shape[0]
+    print(
+        f"CLIPPER selected {Ain.shape[0]} inliers from {A.shape[0]} "
+        f"putative associations (precision {p:.2f}, recall {r:.2f}) in {t1-t0:.3f} s"
+    )
 
-D1, D2, Agt, A = generate_dataset(target_pcd, source_pcd, n1, n2, nia, noa, sigma, T_21)
-
-# View unaligned data
-pcd_2_tf = o3d.geometry.PointCloud()
-pcd_2_tf.points = o3d.utility.Vector3dVector(D2.T)
-pcd_2_tf.paint_uniform_color(np.array([0, 1, 0]))
-o3d.visualization.draw_geometries([target_pcd, pcd_2_tf])
-
-#
-iparams = clipperpy.invariants.EuclideanDistanceParams()
-iparams.sigma = 0.01
-iparams.epsilon = 0.01
-invariant = clipperpy.invariants.EuclideanDistance(iparams)
-
-params = clipperpy.Params()
-params.rounding = clipperpy.Rounding.DSD_HEU
-clipper = clipperpy.CLIPPER(invariant, params)
-
-t0 = time.perf_counter()
-clipper.score_pairwise_consistency(D1, D2, A)
-t1 = time.perf_counter()
-print(f"Affinity matrix creation took {t1-t0:.3f} seconds")
-
-t0 = time.perf_counter()
-clipper.solve()
-t1 = time.perf_counter()
-
-A = clipper.get_initial_associations()
-Ain = clipper.get_selected_associations()
-
-p = np.isin(Ain, Agt)[:, 0].sum() / Ain.shape[0]
-r = np.isin(Ain, Agt)[:, 0].sum() / Agt.shape[0]
-print(
-    f"CLIPPER selected {Ain.shape[0]} inliers from {A.shape[0]} "
-    f"putative associations (precision {p:.2f}, recall {r:.2f}) in {t1-t0:.3f} s"
-)
-
-# 1st point cloud (road)
-model = o3d.geometry.PointCloud()
-model.points = o3d.utility.Vector3dVector(D1.T)
-model.colors = o3d.utility.Vector3dVector(target_pointcloud_rgb)
+    # 1st point cloud (road)
+    model = o3d.geometry.PointCloud()
+    model.points = o3d.utility.Vector3dVector(D1.T)
+    model.colors = o3d.utility.Vector3dVector(target_pointcloud_rgb)
 
 
-data = o3d.geometry.PointCloud()
-data.points = o3d.utility.Vector3dVector(D2.T)
-data.paint_uniform_color(np.array([0, 1, 0]))
+    data = o3d.geometry.PointCloud()
+    data.points = o3d.utility.Vector3dVector(D2.T)
+    data.paint_uniform_color(np.array([0, 1, 0]))
 
-# Draw pc correspondances
-corr = o3d.geometry.LineSet.create_from_point_cloud_correspondences(model, data, Ain)
-o3d.visualization.draw_geometries([model, data, corr])
+    # Draw point cloud correspondances
+    corr = o3d.geometry.LineSet.create_from_point_cloud_correspondences(model, data, Ain)
+    o3d.visualization.draw_geometries([model, data, corr])
 
-p2p = o3d.pipelines.registration.TransformationEstimationPointToPoint()
-That_21 = p2p.compute_transformation(model, data, o3d.utility.Vector2iVector(Ain))
-get_err(T_21, That_21)
-
-draw_registration_result(model, data, That_21)
+    p2p = o3d.pipelines.registration.TransformationEstimationPointToPoint()
+    That_21 = p2p.compute_transformation(model, data, o3d.utility.Vector2iVector(Ain))
+    rerr, terr = get_err(T_21, That_21)
+    print(f"Error: rerror = {rerr}, terror = {terr}")
+    # Map matching with correspondances and estimated transformation
+    draw_registration_result(model, data, That_21)
